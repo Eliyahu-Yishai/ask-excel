@@ -45,16 +45,19 @@ def _first_of(cols: List[str], options: List[str]) -> Optional[str]:
     return None
 
 def _sanitize_select(sql: str) -> str:
-    s = sql.strip().rstrip(";")
-    low = s.lower()
-    if not low.startswith("select "):
-        raise ValueError("Only SELECT is allowed.")
+    s = sql.strip().strip("`").strip()
+    s = re.sub(r'^(here\s+is\s+the\s+sql:?[\s]*)', '', s, flags=re.I)
+    low = s.lstrip().lower()
+    if not (low.startswith("select") or low.startswith("with")):
+        raise ValueError("Only SELECT/WITH is allowed.")
     forbidden = [" update ", " insert ", " delete ", " drop ", " alter ", " create ", " attach ", " copy ", " replace "]
-    if any(tok in f" {low} " for tok in forbidden):
+    low_pad = f" {low} "
+    if any(tok in low_pad for tok in forbidden):
         raise ValueError("Read-only mode: SELECT statements only.")
     if " limit " not in low:
         s += f" LIMIT {MAX_ROWS}"
     return s
+
 
 class Engine:
     def __init__(self):
@@ -153,9 +156,9 @@ class Engine:
     def nl_to_sql(self, question: str) -> str:
         if question.strip().lower().startswith("select "):
             return _sanitize_select(question)
+        
         api_key = OPENAI_API_KEY
-        print(f"Using OpenAI model: {OPENAI_MODEL or 'gpt-4o'}")
-        print(OPENAI_API_KEY)
+
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set (AI mode).")
         schema_json = json.dumps({t: list(df.columns) for t, df in self.registered.items()}, ensure_ascii=False, indent=2)
