@@ -1,27 +1,3 @@
-#!/usr/bin/env python3
-"""
-Excel Q&A – Simple (with optional OpenAI NL→SQL)
-------------------------------------------------
-- Ask questions over an Excel file using DuckDB.
-- Works WITHOUT AI (built-in commands + direct SELECT).
-- If OPENAI_API_KEY is set, you can ask in natural language (Heb/Eng).
-
-Install:
-    pip install -U duckdb pandas openpyxl rich requests
-
-Run:
-    python excel_qa_simple.py path/to/your.xlsx
-
-At the prompt (REPL):
-    schema
-    preview <table>
-    top products
-    revenue by month
-    last quarter top
-    SELECT product, SUM(quantity) ...   (any SELECT)
-    מה המוצר הכי נמכר ברבעון האחרון?   (if OPENAI_API_KEY is set)
-    quit
-"""
 import os
 import re
 import sys
@@ -45,19 +21,16 @@ def _first_of(cols: List[str], options: List[str]) -> Optional[str]:
     return None
 
 def _sanitize_select(sql: str) -> str:
-    s = sql.strip().strip("`").strip()
-    s = re.sub(r'^(here\s+is\s+the\s+sql:?[\s]*)', '', s, flags=re.I)
-    low = s.lstrip().lower()
-    if not (low.startswith("select") or low.startswith("with")):
-        raise ValueError("Only SELECT/WITH is allowed.")
+    s = sql.strip().rstrip(";")
+    low = s.lower()
+    if not low.startswith("select "):
+        raise ValueError("Only SELECT is allowed.")
     forbidden = [" update ", " insert ", " delete ", " drop ", " alter ", " create ", " attach ", " copy ", " replace "]
-    low_pad = f" {low} "
-    if any(tok in low_pad for tok in forbidden):
+    if any(tok in f" {low} " for tok in forbidden):
         raise ValueError("Read-only mode: SELECT statements only.")
     if " limit " not in low:
         s += f" LIMIT {MAX_ROWS}"
     return s
-
 
 class Engine:
     def __init__(self):
@@ -156,27 +129,24 @@ class Engine:
     def nl_to_sql(self, question: str) -> str:
         if question.strip().lower().startswith("select "):
             return _sanitize_select(question)
-        
         api_key = OPENAI_API_KEY
-
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set (AI mode).")
         schema_json = json.dumps({t: list(df.columns) for t, df in self.registered.items()}, ensure_ascii=False, indent=2)
         system = (
-             "You translate natural-language questions (Hebrew or English) into a SINGLE DuckDB-compatible SQL query.\n"
-            "Return ONLY raw SQL, with no commentary, no code fences, no prefixes.\n"
-            "The SQL must start with SELECT or WITH.\n"
+            "You translate natural-language questions (Hebrew or English) into a SINGLE DuckDB-compatible SELECT.\n"
             "Constraints:\n"
             "- READ-ONLY: SELECT only (no DDL/DML)\n"
             "- Use the provided table/column names exactly (snake_case, lowercase)\n"
             "- If no LIMIT present, add LIMIT 1000\n"
             "- Use date_trunc for monthly/quarterly grouping when applicable\n"
+            "- Return ONLY the SQL (no commentary)\n"
         )
         user = f"SCHEMA:\\n{schema_json}\\n\\nQuestion:\\n{question}\\nReturn a single SELECT."
         url = "https://api.openai.com/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         payload = {
-            "model": OPENAI_MODEL or "gpt-4o",
+            "model": OPENAI_MODEL,
             "messages": [{"role":"system","content":system},{"role":"user","content":user}],
             "temperature": 0
         }
